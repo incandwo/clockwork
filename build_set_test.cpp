@@ -8857,7 +8857,6 @@ prog pyr_conv_1d() {
   prg.buffer_port_widths["M3"] = 32;
   prg.buffer_port_widths["M1_o"] = 32;
   prg.buffer_port_widths["M2_o"] = 32;
-  prg.buffer_port_widths["M3_o"] = 32;
 
   int size1 = 134;
   int size1_o = size1 - 2; // 132
@@ -8919,6 +8918,176 @@ prog pyr_conv_1d() {
   return prg;
 }
 
+prog pyr_unroll_1d() {
+  prog prg;
+  prg.compute_unit_file = "accumulate_3.h";
+  prg.name = "pyr_unroll_1d";
+  prg.add_input("in");
+  prg.add_output("out");
+  prg.buffer_port_widths["in"] = 32;
+  prg.buffer_port_widths["out"] = 32;
+  prg.buffer_port_widths["M1"] = 32;
+//  prg.buffer_port_widths["M2"] = 32;
+//  prg.buffer_port_widths["M3"] = 32;
+//  prg.buffer_port_widths["M1_o"] = 32;
+//  prg.buffer_port_widths["M2_o"] = 32;
+
+  int size1 = 450;
+  int size1_o = size1 - 2; // 448
+  int size2 = size1_o / 2; // 224
+  int size2_o = size2 - 2; // 222
+  int size3 = size2_o / 2; // 111
+  int size3_o = size3 - 2; // 109
+
+  int c3_tile = 1;           //  1
+  int d2_tile = c3_tile + 2; //  3
+  int c2_tile = d2_tile * 2; //  6
+  int d1_tile = c2_tile + 2; //  8
+  int c1_tile = d1_tile * 2; // 16
+  int in_tile = c1_tile + 2; // 18
+
+
+  cout << "Pyramid sizes: " << size1 << " " << size1_o << " " << size2 << " " << size2_o << " " << size3 << " " << size3_o << endl;
+  cout << "Tile sizes: " << in_tile << " " << c1_tile << " " << d1_tile << " " << c2_tile << " " << d2_tile << " " << c3_tile << endl;
+  cout << endl;
+
+  auto p = prg.add_loop("p", 0, size3_o);
+
+  // --------------------------------------------------
+  // load inputs
+  cout << "INPUT INDEXES" << endl;
+  for (int i = 0; i < 3; i++) {
+    stringstream ss_index;
+    ss_index << "p + " << i;
+
+    stringstream ss_opname;
+    ss_opname << "get_input_n" << i;
+    
+    if (i != 0) cout << ", ";
+    else cout << ss_opname.str() << "()" << endl;
+    cout << ss_index.str();
+    
+    auto write = p->add_op(ss_opname.str());
+    write->add_load("in", ss_index.str());
+    write->add_store("M1", ss_index.str());
+  }
+  cout << endl << endl;
+
+  // --------------------------------------------------
+  // compute
+  cout << "COMPUTE 1 INDEXES" << endl;
+  for (int i = 0; i < 1; i++) {
+    stringstream ss_index;
+    ss_index << "p + " << i;
+
+    stringstream ss_opname;
+    ss_opname << "comp_l1_n" << i;
+    
+    if (i != 0) cout << ", ";
+    else cout << ss_opname.str() << "()" << endl;
+    cout << ss_index.str();
+    cout << "(" << ss_index.str() + " + 1" <<  ")";
+    
+    auto op = p->add_op(ss_opname.str());
+    op->add_function("accumulate_3");
+    op->add_load("M1", ss_index.str());
+    op->add_load("M1", ss_index.str() + " + 1");
+    op->add_load("M1", ss_index.str() + " + 2");
+    op->add_store("out", ss_index.str());
+  }
+  cout << endl << endl;
+
+  /*
+  // --------------------------------------------------
+  // downsample
+  cout << "DOWNSAMPLE 1 INDEXES" << endl;
+  for (int i = 0; i < d1_tile; i++) {
+    stringstream ss_index;
+    ss_index << "p + " << i;
+
+    stringstream ss_opname;
+    ss_opname << "down_l1_" << i;
+    
+    if (i != 0) cout << ", ";
+    else cout << ss_opname.str() << "()" << endl;
+    cout << ss_index.str();
+    
+    auto op = p->add_op(ss_opname.str());
+    op->add_load("M1_o", "2 * " + ss_index.str());
+    op->add_store("M2", ss_index.str());
+  }
+  cout << endl << endl;
+
+  // --------------------------------------------------
+  // compute
+  cout << "COMPUTE 2 INDEXES" << endl;
+  for (int i = 0; i < c2_tile; i++) {
+    stringstream ss_index;
+    ss_index << "p + " << i;
+
+    stringstream ss_opname;
+    ss_opname << "compute_l2_" << i;
+    
+    if (i != 0) cout << ", ";
+    else cout << ss_opname.str() << "()" << endl;
+    cout << ss_index.str();
+    
+    auto op = p->add_op(ss_opname.str());
+    op->add_function("accumulate_3");
+    op->add_load("M2", ss_index.str());
+    op->add_load("M2", ss_index.str() + " + 1");
+    op->add_load("M2", ss_index.str() + " + 2");
+    op->add_store("M2_o", ss_index.str());
+  }
+  cout << endl << endl;
+
+  // --------------------------------------------------
+  // downsample
+  cout << "DOWNSAMPLE 2 INDEXES" << endl;
+  for (int i = 0; i < d2_tile; i++) {
+    stringstream ss_index;
+    ss_index << "p + " << i;
+
+    stringstream ss_opname;
+    ss_opname << "down_l2_" << i;
+    
+    if (i != 0) cout << ", ";
+    else cout << ss_opname.str() << "()" << endl;
+    cout << ss_index.str();
+    
+    auto op = p->add_op(ss_opname.str());
+    op->add_load("M2_o", "2 * " + ss_index.str());
+    op->add_store("M3", ss_index.str());
+  }
+  cout << endl << endl;
+
+  // --------------------------------------------------
+  // compute
+  cout << "COMPUTE 3 INDEXES" << endl;
+  for (int i = 0; i < c3_tile; i++) {
+    stringstream ss_index;
+    ss_index << "p + " << i;
+
+    stringstream ss_opname;
+    ss_opname << "compute_l3_" << i;
+    
+    if (i != 0) cout << ", ";
+    else cout << ss_opname.str() << "()" << endl;
+    cout << ss_index.str();
+    
+    auto op = p->add_op(ss_opname.str());
+    op->add_function("accumulate_3");
+    op->add_load("M3", ss_index.str());
+    op->add_load("M3", ss_index.str() + " + 1");
+    op->add_load("M3", ss_index.str() + " + 2");
+    op->add_store("out", ss_index.str());
+  }
+  cout << endl << endl;
+
+  */
+  return prg;
+}
+
 prog pyr_tiled_conv_1d() {
   prog prg;
   prg.compute_unit_file = "accumulate_3.h";
@@ -8932,30 +9101,6 @@ prog pyr_tiled_conv_1d() {
   prg.buffer_port_widths["M3"] = 32;
   prg.buffer_port_widths["M1_o"] = 32;
   prg.buffer_port_widths["M2_o"] = 32;
-  prg.buffer_port_widths["M3_o"] = 32;
-
-  /*
-  Unoptimized schedule...
-  : { downsample2[root = 0, d2] -> [0, 0, 4, d2, 0] : 0 <= d2 <= 31; get_input[root = 0, p] -> [0, 0, 0, p, 0] : 0 <= p <= 133; compute_level_3[root = 0, c3] -> [0, 0, 5, c3, 0] : 0 <= c3 <= 29; compute_level_2[root = 0, c2] -> [0, 0, 3, c2, 0] : 0 <= c2 <= 63; compute_level_1[root = 0, c1] -> [0, 0, 1, c1, 0] : 0 <= c1 <= 131; downsample1[root = 0, d1] -> [0, 0, 2, d1, 0] : 0 <= d1 <= 65 }
-{
-  for (int c3 = 0; c3 <= 133; c3 += 1)
-    get_input(0, c3);
-  for (int c3 = 0; c3 <= 131; c3 += 1)
-    compute_level_1(0, c3);
-  for (int c3 = 0; c3 <= 65; c3 += 1)
-    downsample1(0, c3);
-  for (int c3 = 0; c3 <= 63; c3 += 1)
-    for (i3 = 0; i3 <= 5; i3++) // 6 -> one iter of this produces enough for one iter of outer of downsample2
-      compute_level_2(0, c3);
-  for (int c3 = 0; c3 <= 11; c3 += 1)
-    for (i3 = 0; i3 <= 2; i3++) // 3
-      downsample2(0, c3);
-  for (int c3 = 0; c3 <= 29; c3 += 1)
-    for (i3 = 0; i3 <= 0; i3++) // 1
-      compute_level_3(0, c3);
-}
-  */
-
 
   /*
   */
@@ -9092,6 +9237,12 @@ void pyr_conv_1d_test() {
   regression_test(prg);
 }
 
+void pyr_unroll_1d_test() {
+  prog prg = pyr_unroll_1d();
+
+  regression_test(prg);
+}
+
 int main(int argc, char** argv) {
 
   if (argc > 1) {
@@ -9142,7 +9293,7 @@ int main(int argc, char** argv) {
     system("mkdir -p scratch");
     //application_tests();
     //memory_tile_tests();
-    pyr_tiled_conv_1d_test();
+    pyr_unroll_1d_test();
     cout << "All tests passed" << endl;
 
   } else {
